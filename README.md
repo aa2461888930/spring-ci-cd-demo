@@ -3,6 +3,7 @@
 Java 8 + Spring Boot 2.7.18 的最小可运行项目，用来练 GitHub Actions 全流程。
 
 - 完整教程：[docs/教程.md](docs/教程.md)
+- git 命令行手册：[docs/git-操作手册.md](docs/git-操作手册.md)
 - 流水线：[.github/workflows/ci.yml](.github/workflows/ci.yml)
 
 ```bash
