@@ -1,0 +1,10 @@
+server:
+  port: 8080
+
+app:
+  # 版本号由流水线注入，本地跑就是 dev
+  version: ${APP_VERSION:dev}
+
+logging:
+  level:
+    root: INFO

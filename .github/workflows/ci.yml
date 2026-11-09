@@ -1,0 +1,130 @@
+name: CI
+
+# ① 什么时候触发
+on:
+  push:
+    branches: [ main ]
+    tags: [ 'v*' ]          # 打 tag 也会跑，方便发版
+  pull_request:
+    branches: [ main ]      # PR 只跑到测试，不推镜像、不部署
+  workflow_dispatch:        # 手点一下也能跑（Actions 页面有按钮）
+
+permissions:
+  contents: read
+  packages: write           # 推镜像到 ghcr.io 需要
+
+# 同一个分支连续提交时，取消上一次还在跑的，省额度
+concurrency:
+  group: ${{ github.workflow }}-${{ github.ref }}
+  cancel-in-progress: true
+
+env:
+  JAVA_VERSION: '8'
+
+jobs:
+  # ============================================================
+  # 阶段一：编译 + 测试 + 产出 jar
+  # ============================================================
+  build:
+    name: ① 构建与测试
+    runs-on: ubuntu-latest
+    timeout-minutes: 15
+
+    steps:
+      - name: 拉代码
+        uses: actions/checkout@v4
+
+      - name: 安装 JDK 8
+        uses: actions/setup-java@v4
+        with:
+          distribution: temurin
+          java-version: ${{ env.JAVA_VERSION }}
+          cache: maven          # 自动缓存 ~/.m2，第二次跑会快很多
+
+      - name: 编译并运行测试
+        run: mvn -B -ntp verify
+
+      # if: always() 表示"哪怕上面失败了也要执行"，这样测试挂了也能下载报告
+      - name: 留档 · 测试报告
+        if: always()
+        uses: actions/upload-artifact@v4
+        with:
+          name: test-reports
+          path: target/surefire-reports/
+          retention-days: 7
+
+      - name: 留档 · 可执行 jar
+        uses: actions/upload-artifact@v4
+        with:
+          name: app-jar
+          path: target/app.jar
+          retention-days: 7
+
+  # ============================================================
+  # 阶段二：打镜像推到 GitHub 容器仓库（ghcr.io）
+  # 只在 main / tag / 手动触发时跑，PR 不推
+  # ============================================================
+  image:
+    name: ② 构建镜像
+    needs: build
+    if: github.event_name != 'pull_request'
+    runs-on: ubuntu-latest
+
+    steps:
+      - name: 拉代码
+        uses: actions/checkout@v4
+
+      - name: 取回阶段一的 jar
+        uses: actions/download-artifact@v4
+        with:
+          name: app-jar
+          path: target/
+
+      # ghcr 要求仓库名全小写，GitHub 用户名可能是大写
+      - name: 镜像名转小写
+        run: echo "IMAGE_NAME=$(echo '${{ github.repository }}' | tr '[:upper:]' '[:lower:]')" >> "$GITHUB_ENV"
+
+      - name: 登录 ghcr.io
+        uses: docker/login-action@v3
+        with:
+          registry: ghcr.io
+          username: ${{ github.actor }}
+          password: ${{ secrets.GITHUB_TOKEN }}
+
+      - name: 构建并推送
+        uses: docker/build-push-action@v6
+        with:
+          context: .
+          push: true
+          build-args: APP_VERSION=${{ github.sha }}
+          tags: |
+            ghcr.io/${{ env.IMAGE_NAME }}:${{ github.sha }}
+            ghcr.io/${{ env.IMAGE_NAME }}:latest
+
+  # ============================================================
+  # 阶段三：部署。environment 是"人工门禁"的关键
+  # 在仓库 Settings → Environments 建一个 production，
+  # 勾上 Required reviewers，这一步就会停下来等人点 Approve
+  # ============================================================
+  deploy:
+    name: ③ 部署到生产
+    needs: image
+    runs-on: ubuntu-latest
+    environment:
+      name: production
+      url: ${{ vars.DEPLOY_URL || 'https://example.com' }}
+
+    steps:
+      - name: 打印本次要发布的版本
+        run: |
+          IMAGE="ghcr.io/$(echo '${{ github.repository }}' | tr '[:upper:]' '[:lower:]'):${{ github.sha }}"
+          echo "镜像   : $IMAGE"
+          echo "提交   : ${{ github.sha }}"
+          echo "触发人 : ${{ github.actor }}"
+          echo "分支   : ${{ github.ref_name }}"
+
+      # 下面是占位。等你有了真实的服务器 / K8s，把它换成真的命令：
+      #   - k8s:  kubectl set image deploy/app app=$IMAGE
+      #   - 虚拟机: ssh user@host "docker pull $IMAGE && docker run -d -p 8080:8080 $IMAGE"
+      - name: 执行部署（占位）
+        run: echo "✅ 这里换成你真实的部署命令"
