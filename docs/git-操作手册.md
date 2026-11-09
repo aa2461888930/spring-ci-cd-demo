@@ -225,50 +225,86 @@ git status -sb
 
 ---
 
-## 6. 认证：为什么命令行 push 会要求密码
+## 6. 认证：我有 SSH key，为什么 push 还要密码？
 
-GitHub 早就**不允许用账号密码**推代码了。两个选择：
+因为 **HTTPS 和 SSH 是两扇不同的门**：
 
-### 方案 A：Personal Access Token（最省事）
+| 远程地址长这样 | 用什么认证 | 会问密码吗 |
+|---|---|---|
+| `https://github.com/用户/仓库.git` | 用户名 + Token | 会（要粘贴 token） |
+| `git@github.com:用户/仓库.git` | SSH 私钥 | **不会** |
 
-1. 打开 https://github.com/settings/tokens → **Generate new token (classic)**
-2. 勾 `repo` 权限（要推 Actions 的话再勾 `workflow`）
-3. 生成后**立刻复制**（只显示一次）
-4. push 时用户名填你的 GitHub 名，**密码位置粘贴这个 token**
+SSH key 只对 `git@` 开头的地址生效。`git remote add` 时写了 `https://`，那把 key 再完好也用不上——这就是"明明有 key 还要密码"的全部原因。
 
-想少输几次：
+顺带解释 IDEA：它不问密码，是因为它把 GitHub 的 OAuth 令牌存在自己的密码库里了，跟 SSH key 无关。
 
-```bash
-git config --global credential.helper osxkeychain
+### 你机器上的实测
+
+```console
+$ ssh -T git@github.com
+Hi aa2461888930! You've successfully authenticated, but GitHub does not provide shell access.
+
+$ ssh -T -i ~/.ssh/id_ed25519 git@github.com
+git@github.com: Permission denied (publickey).
 ```
 
-下次输入后 macOS 钥匙串会记住。
+| 密钥 | 状态 |
+|---|---|
+| `~/.ssh/id_rsa`（3072 位 RSA） | ✅ 已注册，可用 |
+| `~/.ssh/id_ed25519` | ❌ 未注册 |
 
-### 方案 B：SSH 密钥（一次配置，长期免密）
+**结论：直接用 `id_rsa` 走 SSH，全程不输密码。**
 
-```bash
-ssh-keygen -t ed25519 -C "2461888930@qq.com"     # 一路回车
-cat ~/.ssh/id_ed25519.pub                        # 复制这行
-```
-
-粘贴到 https://github.com/settings/keys → **New SSH key**。
-
-然后远程地址换成 SSH 形式：
+### 用 SSH 推送
 
 ```bash
-git remote set-url origin git@github.com:<你的用户名>/spring-ci-cd-demo.git
-ssh -T git@github.com     # 看到 "Hi xxx! You've successfully authenticated" 就成了
+# 1. 验证能连上（看到 Hi 你的用户名 就对了）
+ssh -T git@github.com
+
+# 2. 远程地址用 SSH 形式（注意是冒号，不是斜杠）
+git remote add origin git@github.com:aa2461888930/spring-ci-cd-demo.git
+
+# 3. 推
+git push -u origin main
 ```
 
-### 顺带：装 gh CLI，连认证都省了
+已经加过 HTTPS 地址的，改一下就行：
 
 ```bash
-brew install gh
-gh auth login     # 选 GitHub.com → HTTPS → 浏览器登录
-gh auth setup-git # 让 git 也用 gh 的凭据
+git remote set-url origin git@github.com:aa2461888930/spring-ci-cd-demo.git
 ```
 
-装完之后 `git push` 直接就能用，不用管 token。
+### 建议：再补一把 ed25519（RSA 3072 有点老）
+
+```bash
+ssh-keygen -t ed25519 -C "2461888930@qq.com"   # 一路回车
+pbcopy < ~/.ssh/id_ed25519.pub                  # 已复制到剪贴板
+# 粘贴到 https://github.com/settings/keys → New SSH key
+```
+
+### 兜底：公司网络封了 22 端口怎么办
+
+在 `~/.ssh/config` 里加：
+
+```
+Host github.com
+  HostName ssh.github.com
+  Port 443
+```
+
+`ssh -T git@github.com` 再试一次。走 443 端口，防火墙通常不拦。
+
+### 最后的兜底：Token
+
+实在要用 HTTPS（比如某些 CI 环境）：
+
+1. https://github.com/settings/tokens → Generate new token (classic)
+2. 勾 `repo` + `workflow`（推 `.github/workflows` 必须有）
+3. push 时用户名填 GitHub 名，**密码位置粘贴 token**
+
+```bash
+git config --global credential.helper osxkeychain   # 记住，下次不用再输
+```
 
 ---
 
@@ -463,28 +499,45 @@ git switch -c feature/xxx      # 开新分支
 
 ---
 
-## 14. 现在，把这个项目推上去（照抄）
+## 14. 现在，把这个项目推上去（照抄，SSH 版）
 
 ```bash
 cd ~/Documents/deepseek-harness/default-workspace/spring-ci-cd-demo
 
-# 1. 确认没有漏文件
-git status -sb
+# 0. 确认 SSH 通（期望：Hi aa2461888930! You've successfully authenticated）
+ssh -T git@github.com
 
-# 2. 关联远程（换成你的用户名）
-git remote add origin https://github.com/<你的用户名>/spring-ci-cd-demo.git
+# 1. 网页建仓：github.com/new → spring-ci-cd-demo → Public → 什么都别勾
 
-# 3. 推送
+# 2. 关联远程
+git remote add origin git@github.com:aa2461888930/spring-ci-cd-demo.git
+
+# 3. 确认加对了
+git remote -v
+
+# 4. 推
 git push -u origin main
 
-# 4. 验证
-git status -sb
-# 期望：## main...origin/main
+# 5. 验证：两边齐平就是成功
+git status -sb          # 期望 ## main...origin/main
 ```
 
-推成功的**下一秒**，去仓库的 **Actions** 标签，你会看到 `① 构建与测试` 已经在转了。
+### 一个容易忽略的小事：邮箱要和 GitHub 对上
 
-那一刻你推的不只是代码，是触发了整条流水线——这就是 CI/CD 的起点。
+否则提交记录不显示你的头像、贡献图也不绿。
+
+```bash
+git config --global user.email   # 现在: 2461888930@qq.com
+```
+
+如果这个邮箱不是 GitHub 账号里绑定的那个，改成绑定的那个；不想暴露真实邮箱就用 GitHub 给的不公开地址：
+
+```bash
+git config --global user.email "<你的ID>+<用户名>@users.noreply.github.com"
+# 在 GitHub → Settings → Emails 页面能看到确切地址
+```
+
+已经提交的历史不受影响，之后的新提交会用新邮箱。
 
 ---
 
@@ -495,6 +548,8 @@ git status -sb
 | `remote origin already exists` | 已经加过远程 | `git remote set-url origin <新地址>` |
 | `rejected (non-fast-forward)` | 远程有你本地没有的提交 | 先 `git pull --rebase`，再 push |
 | `Authentication failed` | 用了密码而不是 token | 见第 6 节 |
+| `Permission denied (publickey)` | 这把 SSH key 没注册到 GitHub | `ssh -T -i <key> git@github.com` 逐个排查 |
+| `Could not read from remote repository` | 没权限 / 地址写错 / 没建仓库 | 检查 `git remote -v` 和仓库是否存在 |
 | `src refspec main does not match any` | 本地还没有 main 分支/提交 | 先 `git add . && git commit` |
 | `fatal: not a git repository` | 不在仓库目录里 | `cd` 到有 `.git` 的目录，用 `git rev-parse --show-toplevel` 找 |
 | `Please tell me who you are` | 没配用户名邮箱 | `git config --global user.name/user.email` |
